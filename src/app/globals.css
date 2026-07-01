@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --radius: 0.5rem;
+  }
+
+  * {
+    border-color: #6E3482;
+  }
+
+  body {
+    font-family: var(--font-shantell), ui-sans-serif, system-ui;
+    background-color: #49225B;
+    color: #F5EBFA;
+  }
+
+  ::selection {
+    background-color: #6E3482;
+    color: #F5EBFA;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #49225B;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #6E3482;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #A56ABD;
+  }
+}
+
+@layer components {
+  .terminal-card {
+    @apply bg-white/5 border border-[#6E3482]/40 rounded-lg backdrop-blur-sm;
+  }
+
+  .terminal-card-elevated {
+    @apply bg-white/[0.08] border border-[#A56ABD]/30 rounded-lg backdrop-blur-sm shadow-lg;
+  }
+
+  .glow-border {
+    box-shadow: 0 0 0 1px rgba(165, 106, 189, 0.25), 0 0 20px rgba(110, 52, 130, 0.15);
+  }
+
+  .scan-line {
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(165, 106, 189, 0.03) 2px,
+      rgba(165, 106, 189, 0.03) 4px
+    );
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 5px rgba(165, 106, 189, 0.25); }
+  50% { box-shadow: 0 0 20px rgba(165, 106, 189, 0.5); }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s ease-out forwards;
+}

@@ -1,0 +1,10 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "env": {
+    "NEXT_PUBLIC_GENLAYER_RPC_URL": "@genlayer_rpc_url",
+    "NEXT_PUBLIC_CONTRACT_ADDRESS": "@contract_address",
+    "NEXT_PUBLIC_EXPLORER_URL": "@explorer_url"
+  }
+}
