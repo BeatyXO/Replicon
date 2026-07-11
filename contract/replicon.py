@@ -1,4 +1,4 @@
-# v0.2.19
+# v0.2.20
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 from genlayer import *
@@ -413,10 +413,10 @@ class RepliconProtocol(gl.Contract):
             )
         return audit_id
 
-    def _collect_evidence_packet(self, case_id: str) -> str:
+    def _collect_evidence_packet(self, case_id: str) -> typing.List[typing.Any]:
         ev_ids_raw = self.case_evidence_index.get(case_id, "")
         if ev_ids_raw == "":
-            return "[]"
+            return []
         ev_ids = ev_ids_raw.split("|")
         collected: typing.List[typing.Any] = []
         for ev_id in ev_ids:
@@ -437,7 +437,36 @@ class RepliconProtocol(gl.Contract):
                     "relevance_note": ev.get("relevance_note", ""),
                     "url_hash": ev.get("url_hash", ""),
                 })
-        return self._json(collected)
+        return collected
+
+    def _fetch_evidence_excerpt(self, url: str, max_chars: int) -> str:
+        # Runs inside the leader/validator non-deterministic block. A dead or
+        # unstable link must not crash consensus — fall back to empty string
+        # and let the prompt fall back to the submitter's relevance note.
+        if url is None or url.strip() == "":
+            return ""
+        try:
+            response = gl.nondet.web.get(url)
+            text = response.body.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            return ""
+        if len(text) > max_chars:
+            text = text[:max_chars]
+        return text
+
+    def _build_grounded_evidence(self, evidence_items: typing.List[typing.Any]) -> typing.List[typing.Any]:
+        grounded: typing.List[typing.Any] = []
+        for ev in evidence_items[:6]:
+            excerpt = self._fetch_evidence_excerpt(ev.get("url", ""), 1500)
+            grounded.append({
+                "evidence_id": ev.get("evidence_id", ""),
+                "title": ev.get("title", ""),
+                "evidence_type": ev.get("evidence_type", ""),
+                "source_name": ev.get("source_name", ""),
+                "relevance_note": ev.get("relevance_note", ""),
+                "fetched_source_excerpt": excerpt if excerpt != "" else "[source unavailable — evaluate from relevance_note only]",
+            })
+        return grounded
 
     def _normalise_ai_verdict(self, raw: typing.Any) -> typing.Any:
         if isinstance(raw, str):
@@ -554,10 +583,50 @@ class RepliconProtocol(gl.Contract):
 
         return verdict
 
+    def _consensus_prompt(self, case_json: str, grounded_evidence_json: str) -> str:
+        return (
+            "You are a world-class scientific peer reviewer and statistician with deep expertise "
+            "in research methodology, statistical analysis, and reproducibility science.\n\n"
+            f"RESEARCH CASE: {case_json}\n"
+            f"EVIDENCE (fetched from the submitter's source URLs — treat fetched_source_excerpt as "
+            f"ground truth over relevance_note when they conflict): {grounded_evidence_json}\n\n"
+            "Evaluate the research case against the fetched evidence and return ONLY valid JSON — "
+            "no markdown, no explanation outside the JSON.\n\n"
+            "Return exactly this structure:\n"
+            '{"credibility_verdict":"credible",'
+            '"replication_score":70,'
+            '"novelty_score":60,'
+            '"confidence_score":72,'
+            '"statistical_significance":"Moderate",'
+            '"methodology_quality":"Medium-High",'
+            '"evidence_strength":"Medium",'
+            '"contradiction_level":"Low",'
+            '"reasoning":"2-4 sentence scientific reasoning.",'
+            '"recommended_follow_up":"Specific recommended follow-up action.",'
+            '"key_supporting_evidence":["strength 1","strength 2","strength 3"],'
+            '"key_concerns":["concern 1","concern 2"],'
+            '"methodology_strengths":["strength 1","strength 2"],'
+            '"methodology_weaknesses":["weakness 1","weakness 2"],'
+            '"replication_barriers":["barrier 1","barrier 2"],'
+            '"suggested_follow_up":["follow-up 1","follow-up 2"],'
+            '"expert_review_required":false,'
+            '"audit_summary":"One sentence audit summary."}\n\n'
+            "credibility_verdict options: highly_credible, credible, partially_credible, insufficient_evidence, not_credible\n"
+            "statistical_significance options: Very Strong, Strong, Moderate, Weak, Very Weak, Unclear\n"
+            "methodology_quality options: Very High, High, Medium-High, Medium, Medium-Low, Low, Very Low\n"
+            "evidence_strength options: Very High, High, Medium-High, Medium, Medium-Low, Low, Very Low\n"
+            "contradiction_level options: None, Low, Moderate, High, Very High\n"
+            "All scores are integers 0-100.\n"
+            "highly_credible requires strong statistical evidence, rigorous methodology, and high replication likelihood.\n"
+            "not_credible requires clear evidence of flawed methodology, data fabrication indicators, or fundamental logical errors.\n"
+            "If an evidence item's fetched_source_excerpt is unavailable, treat that item as weaker support and say so in key_concerns.\n"
+            "The reasoning and verdict must be grounded in the fetched evidence, not assumed from titles alone."
+        )
+
     def _run_consensus_review(
         self,
         case_record: typing.Any,
-        evidence_packet: str,
+        evidence_items: typing.List[typing.Any],
     ) -> typing.Any:
         case_json = self._json({
             "case_id": case_record.get("case_id", ""),
@@ -571,56 +640,36 @@ class RepliconProtocol(gl.Contract):
             "evidence_summary": case_record.get("evidence_summary", ""),
         })
 
-        context = (
-            f"RESEARCH CASE: {case_json}\n"
-            f"SUBMITTED EVIDENCE: {evidence_packet}"
-        )
+        # Leader and validators each independently fetch the evidence source
+        # URLs and independently ask the LLM for a verdict — the validator
+        # never trusts the leader's JSON on its own. It re-derives the
+        # decision from the same grounded evidence and only accepts the
+        # leader's result if the decision fields agree within tolerance.
+        def leader_fn() -> typing.Any:
+            grounded = self._build_grounded_evidence(evidence_items)
+            prompt = self._consensus_prompt(case_json, self._json(grounded))
+            response = gl.nondet.exec_prompt(prompt, response_format="json")
+            return self._normalise_ai_verdict(response)
 
-        consensus_json = gl.eq_principle.prompt_non_comparative(
-            lambda: context,
-            task=(
-                "You are a world-class scientific peer reviewer and statistician with deep expertise "
-                "in research methodology, statistical analysis, and reproducibility science.\n\n"
-                "Evaluate the research case and submitted evidence, then return ONLY valid JSON — "
-                "no markdown, no explanation outside the JSON.\n\n"
-                "Return exactly this structure:\n"
-                '{"credibility_verdict":"credible",'
-                '"replication_score":70,'
-                '"novelty_score":60,'
-                '"confidence_score":72,'
-                '"statistical_significance":"Moderate",'
-                '"methodology_quality":"Medium-High",'
-                '"evidence_strength":"Medium",'
-                '"contradiction_level":"Low",'
-                '"reasoning":"2-4 sentence scientific reasoning.",'
-                '"recommended_follow_up":"Specific recommended follow-up action.",'
-                '"key_supporting_evidence":["strength 1","strength 2","strength 3"],'
-                '"key_concerns":["concern 1","concern 2"],'
-                '"methodology_strengths":["strength 1","strength 2"],'
-                '"methodology_weaknesses":["weakness 1","weakness 2"],'
-                '"replication_barriers":["barrier 1","barrier 2"],'
-                '"suggested_follow_up":["follow-up 1","follow-up 2"],'
-                '"expert_review_required":false,'
-                '"audit_summary":"One sentence audit summary."}\n\n'
-                "credibility_verdict options: highly_credible, credible, partially_credible, insufficient_evidence, not_credible\n"
-                "statistical_significance options: Very Strong, Strong, Moderate, Weak, Very Weak, Unclear\n"
-                "methodology_quality options: Very High, High, Medium-High, Medium, Medium-Low, Low, Very Low\n"
-                "evidence_strength options: Very High, High, Medium-High, Medium, Medium-Low, Low, Very Low\n"
-                "contradiction_level options: None, Low, Moderate, High, Very High\n"
-                "All scores are integers 0-100."
-            ),
-            criteria=(
-                "The credibility_verdict must be one of: highly_credible, credible, partially_credible, insufficient_evidence, not_credible.\n"
-                "highly_credible requires strong statistical evidence, rigorous methodology, and high replication likelihood.\n"
-                "not_credible requires clear evidence of flawed methodology, data fabrication indicators, or fundamental logical errors.\n"
-                "The replication_score must reflect the realistic probability of independent replication under similar conditions.\n"
-                "The confidence_score must reflect the reviewer's confidence in this assessment given available evidence.\n"
-                "The reasoning must be grounded in the submitted evidence and case details.\n"
-                "The response must be valid JSON with no surrounding text."
-            ),
-        )
+        def validator_fn(leader_result: typing.Any) -> bool:
+            if not isinstance(leader_result, gl.vm.Return):
+                return False
+            leader_verdict = leader_result.calldata
+            my_verdict = leader_fn()
 
-        return self._normalise_ai_verdict(consensus_json)
+            # Gate: the categorical decision must match exactly.
+            if my_verdict["credibility_verdict"] != leader_verdict["credibility_verdict"]:
+                return False
+
+            # Scores are LLM-subjective — allow tolerance, not exact match.
+            if abs(my_verdict["replication_score"] - leader_verdict["replication_score"]) > 15:
+                return False
+            if abs(my_verdict["confidence_score"] - leader_verdict["confidence_score"]) > 15:
+                return False
+
+            return True
+
+        return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
 
     def _update_researcher_stats(self, wallet: str, event: str) -> None:
         key = wallet.lower()
