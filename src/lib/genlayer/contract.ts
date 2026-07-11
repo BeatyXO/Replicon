@@ -105,6 +105,28 @@ export async function getCaseAuditLogs(caseId: string): Promise<AuditLog[]> {
   return parseJson<AuditLog[]>(result as unknown as string, [])
 }
 
+// ─── Admin reads ────────────────────────────────────────────
+
+export async function getOwner(): Promise<string> {
+  const result = await rc().readContract({ address: addr(), functionName: 'get_owner', args: [] })
+  return String(result ?? '')
+}
+
+export async function getIsPaused(): Promise<boolean> {
+  const result = await rc().readContract({ address: addr(), functionName: 'is_paused', args: [] })
+  return Boolean(result)
+}
+
+export async function getPlatformRole(wallet: string): Promise<string> {
+  const result = await rc().readContract({ address: addr(), functionName: 'get_platform_role', args: [wallet] })
+  return String(result ?? '')
+}
+
+export async function getAllDomains(): Promise<Array<Record<string, unknown>>> {
+  const result = await rc().readContract({ address: addr(), functionName: 'get_all_domains', args: [] })
+  return parseJson<Array<Record<string, unknown>>>(result as unknown as string, [])
+}
+
 // ─── Write (signer passed into client) ────────────────────────
 
 function wc(signer: `0x${string}`) { return getGenLayerClient(signer) }
@@ -219,4 +241,84 @@ export async function followCase(senderAddress: `0x${string}`, caseId: string): 
 
 export async function waitForTransaction(txHash: string): Promise<void> {
   await rc().waitForTransactionReceipt({ hash: txHash as TxHash })
+}
+
+// ─── Admin writes (owner-only unless noted) ────────────────────
+
+export async function grantPlatformRole(
+  senderAddress: `0x${string}`,
+  wallet: string,
+  role: 'REVIEWER' | 'EXPERT' | 'ADMIN' | 'MODERATOR'
+): Promise<string> {
+  const txHash = await wc(senderAddress).writeContract({
+    address: addr(),
+    functionName: 'grant_platform_role',
+    args: [wallet, role, new Date().toISOString()],
+    value: BigInt(0),
+  })
+  return txHash as string
+}
+
+export async function revokePlatformRole(senderAddress: `0x${string}`, wallet: string): Promise<string> {
+  const txHash = await wc(senderAddress).writeContract({
+    address: addr(),
+    functionName: 'revoke_platform_role',
+    args: [wallet, new Date().toISOString()],
+    value: BigInt(0),
+  })
+  return txHash as string
+}
+
+export async function registerDomain(
+  senderAddress: `0x${string}`,
+  params: { domainId: string; displayName: string; description: string; parentDomain?: string }
+): Promise<string> {
+  const txHash = await wc(senderAddress).writeContract({
+    address: addr(),
+    functionName: 'register_domain',
+    args: [params.domainId, params.displayName, params.description, params.parentDomain ?? '', new Date().toISOString()],
+    value: BigInt(0),
+  })
+  return txHash as string
+}
+
+export async function pauseContract(senderAddress: `0x${string}`): Promise<string> {
+  const txHash = await wc(senderAddress).writeContract({
+    address: addr(), functionName: 'pause', args: [], value: BigInt(0),
+  })
+  return txHash as string
+}
+
+export async function unpauseContract(senderAddress: `0x${string}`): Promise<string> {
+  const txHash = await wc(senderAddress).writeContract({
+    address: addr(), functionName: 'unpause', args: [], value: BigInt(0),
+  })
+  return txHash as string
+}
+
+export async function transferOwnership(senderAddress: `0x${string}`, newOwner: string): Promise<string> {
+  const txHash = await wc(senderAddress).writeContract({
+    address: addr(),
+    functionName: 'transfer_ownership',
+    args: [newOwner, new Date().toISOString()],
+    value: BigInt(0),
+  })
+  return txHash as string
+}
+
+// ─── Platform reviewer writes ───────────────────────────────
+
+export async function resolveDispute(
+  senderAddress: `0x${string}`,
+  caseId: string,
+  resolution: 'UPHELD' | 'OVERTURNED' | 'REFERRED',
+  notes: string
+): Promise<string> {
+  const txHash = await wc(senderAddress).writeContract({
+    address: addr(),
+    functionName: 'resolve_dispute',
+    args: [caseId, resolution, notes, new Date().toISOString()],
+    value: BigInt(0),
+  })
+  return txHash as string
 }

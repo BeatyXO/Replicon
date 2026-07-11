@@ -10,6 +10,7 @@ const NAV_LINKS = [
   { href: '/cases', label: 'Research Cases' },
   { href: '/evidence', label: 'Evidence Registry' },
   { href: '/settings', label: 'Settings' },
+  { href: '/admin', label: 'Admin' },
 ]
 
 export function Navbar() {
